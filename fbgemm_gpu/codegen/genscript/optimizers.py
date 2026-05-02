@@ -1440,6 +1440,114 @@ def lars_sgd() -> Dict[str, Any]:
     }
 
 
+def adadelta() -> Dict[str, Any]:
+    # AdaDelta (element-wise): keeps running averages of squared gradients
+    # (momentum1 = E[g^2]) and squared parameter updates (momentum2 = E[dx^2]).
+    # beta1 is reused as the decay rate `rho`.
+    split_weight_update = """
+      Vec4T<cache_t> s_t(&momentum1[idx * D + d]);
+      Vec4T<cache_t> u_t(&momentum2[idx * D + d]);
+
+      // s = rho * s + (1 - rho) * g^2
+      s_t.acc.x = beta1 * s_t.acc.x + (1.0 - beta1) * grad.acc.x * grad.acc.x;
+      s_t.acc.y = beta1 * s_t.acc.y + (1.0 - beta1) * grad.acc.y * grad.acc.y;
+      s_t.acc.z = beta1 * s_t.acc.z + (1.0 - beta1) * grad.acc.z * grad.acc.z;
+      s_t.acc.w = beta1 * s_t.acc.w + (1.0 - beta1) * grad.acc.w * grad.acc.w;
+      s_t.store(&momentum1[idx * D + d]);
+
+      // dx = sqrt(u + eps) / sqrt(s + eps) * g
+      auto dx_x = sqrtf(u_t.acc.x + eps) / sqrtf(s_t.acc.x + eps) * grad.acc.x;
+      auto dx_y = sqrtf(u_t.acc.y + eps) / sqrtf(s_t.acc.y + eps) * grad.acc.y;
+      auto dx_z = sqrtf(u_t.acc.z + eps) / sqrtf(s_t.acc.z + eps) * grad.acc.z;
+      auto dx_w = sqrtf(u_t.acc.w + eps) / sqrtf(s_t.acc.w + eps) * grad.acc.w;
+
+      // u = rho * u + (1 - rho) * dx^2
+      u_t.acc.x = beta1 * u_t.acc.x + (1.0 - beta1) * dx_x * dx_x;
+      u_t.acc.y = beta1 * u_t.acc.y + (1.0 - beta1) * dx_y * dx_y;
+      u_t.acc.z = beta1 * u_t.acc.z + (1.0 - beta1) * dx_z * dx_z;
+      u_t.acc.w = beta1 * u_t.acc.w + (1.0 - beta1) * dx_w * dx_w;
+      u_t.store(&momentum2[idx * D + d]);
+
+      weight_new.acc.x -= learning_rate * (dx_x + weight_decay * weight_new.acc.x);
+      weight_new.acc.y -= learning_rate * (dx_y + weight_decay * weight_new.acc.y);
+      weight_new.acc.z -= learning_rate * (dx_z + weight_decay * weight_new.acc.z);
+      weight_new.acc.w -= learning_rate * (dx_w + weight_decay * weight_new.acc.w);
+    """
+    split_weight_update_cpu = ""  # CPU fallback not supported in v1
+
+    return {
+        "optimizer": "adadelta",
+        "args": OptimizerArgsSet.create(
+            [
+                OptimItem(ArgType.TENSOR, "momentum1"),
+                OptimItem(ArgType.TENSOR, "momentum2"),
+                OptimItem(ArgType.TENSOR, "learning_rate_tensor"),
+                OptimItem(ArgType.FLOAT, "eps"),
+                OptimItem(ArgType.FLOAT, "beta1"),
+                OptimItem(ArgType.FLOAT, "weight_decay"),
+            ],
+            {
+                "v1": "Tensor momentum1, Tensor momentum2, float learning_rate = 0, float eps = 0, float beta1 = 0, float weight_decay = 0"
+            },
+        ),
+        "split_precomputation": "",
+        "split_weight_update": split_weight_update,
+        "split_post_update": "",
+        "split_weight_update_cpu": split_weight_update_cpu,
+        "has_cpu_support": False,
+        "has_gpu_support": True,
+        "has_vbe_support": False,
+        "has_global_weight_decay_support": False,
+        "has_ssd_support": False,
+    }
+
+
+def rmsprop() -> Dict[str, Any]:
+    # RMSProp (element-wise): keeps a running average of squared gradients
+    # (momentum2 = E[g^2]). beta1 is reused as the decay rate `alpha`.
+    split_weight_update = """
+      Vec4T<cache_t> v_t(&momentum2[idx * D + d]);
+
+      // v = alpha * v + (1 - alpha) * g^2
+      v_t.acc.x = beta1 * v_t.acc.x + (1.0 - beta1) * grad.acc.x * grad.acc.x;
+      v_t.acc.y = beta1 * v_t.acc.y + (1.0 - beta1) * grad.acc.y * grad.acc.y;
+      v_t.acc.z = beta1 * v_t.acc.z + (1.0 - beta1) * grad.acc.z * grad.acc.z;
+      v_t.acc.w = beta1 * v_t.acc.w + (1.0 - beta1) * grad.acc.w * grad.acc.w;
+      v_t.store(&momentum2[idx * D + d]);
+
+      weight_new.acc.x -= learning_rate * (grad.acc.x / (sqrtf(v_t.acc.x) + eps) + weight_decay * weight_new.acc.x);
+      weight_new.acc.y -= learning_rate * (grad.acc.y / (sqrtf(v_t.acc.y) + eps) + weight_decay * weight_new.acc.y);
+      weight_new.acc.z -= learning_rate * (grad.acc.z / (sqrtf(v_t.acc.z) + eps) + weight_decay * weight_new.acc.z);
+      weight_new.acc.w -= learning_rate * (grad.acc.w / (sqrtf(v_t.acc.w) + eps) + weight_decay * weight_new.acc.w);
+    """
+    split_weight_update_cpu = ""  # CPU fallback not supported in v1
+
+    return {
+        "optimizer": "rmsprop",
+        "args": OptimizerArgsSet.create(
+            [
+                OptimItem(ArgType.TENSOR, "momentum2"),
+                OptimItem(ArgType.TENSOR, "learning_rate_tensor"),
+                OptimItem(ArgType.FLOAT, "eps"),
+                OptimItem(ArgType.FLOAT, "beta1"),
+                OptimItem(ArgType.FLOAT, "weight_decay"),
+            ],
+            {
+                "v1": "Tensor momentum2, float learning_rate = 0, float eps = 0, float beta1 = 0, float weight_decay = 0"
+            },
+        ),
+        "split_precomputation": "",
+        "split_weight_update": split_weight_update,
+        "split_post_update": "",
+        "split_weight_update_cpu": split_weight_update_cpu,
+        "has_cpu_support": False,
+        "has_gpu_support": True,
+        "has_vbe_support": False,
+        "has_global_weight_decay_support": False,
+        "has_ssd_support": False,
+    }
+
+
 def none_optimizer() -> Dict[str, Any]:
     return {
         "optimizer": "none",
