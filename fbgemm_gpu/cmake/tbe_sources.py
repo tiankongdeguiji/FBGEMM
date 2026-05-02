@@ -24,6 +24,8 @@ GPU_ONLY_OPTIMIZERS = [
     "lars_sgd",
     "partial_rowwise_adam",
     "partial_rowwise_lamb",
+    "adadelta",
+    "rmsprop",
     "none",
 ]
 
