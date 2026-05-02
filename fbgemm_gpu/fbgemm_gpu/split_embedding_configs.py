@@ -76,6 +76,8 @@ class EmbOptimType(enum.Enum):
     EXACT_ROWWISE_WEIGHTED_ADAGRAD = "exact_row_wise_weighted_adagrad"  # deprecated
     ENSEMBLE_ROWWISE_ADAGRAD = "ensemble_row_wise_adagrad"
     EMAINPLACE_ROWWISE_ADAGRAD = "ema_in_place_row_wise_adagrad"
+    ADADELTA = "adadelta"
+    RMSPROP = "rmsprop"
     NONE = "none"
 
     def __str__(self) -> str:
@@ -99,6 +101,10 @@ class EmbOptimType(enum.Enum):
             return ["momentum1"]
         elif self in [EmbOptimType.PARTIAL_ROWWISE_ADAM, EmbOptimType.ADAM]:
             return ["momentum1", "momentum2"]
+        elif self == EmbOptimType.ADADELTA:
+            return ["momentum1", "momentum2"]
+        elif self == EmbOptimType.RMSPROP:
+            return ["momentum2"]
         else:
             return []
 
@@ -113,6 +119,10 @@ class EmbOptimType(enum.Enum):
             return {"momentum1": D, "momentum2": 1}
         elif self == EmbOptimType.ADAM:
             return {"momentum1": D, "momentum2": D}
+        elif self == EmbOptimType.ADADELTA:
+            return {"momentum1": D, "momentum2": D}
+        elif self == EmbOptimType.RMSPROP:
+            return {"momentum2": D}
         else:
             return {}
 
@@ -136,6 +146,12 @@ class EmbOptimType(enum.Enum):
 
         elif self == EmbOptimType.ADAM:
             return (D * momentum1_dtype.itemsize) + (D * momentum2_dtype.itemsize)
+
+        elif self == EmbOptimType.ADADELTA:
+            return (D * momentum1_dtype.itemsize) + (D * momentum2_dtype.itemsize)
+
+        elif self == EmbOptimType.RMSPROP:
+            return D * momentum2_dtype.itemsize
 
         else:
             return 0
@@ -179,6 +195,17 @@ class EmbOptimType(enum.Enum):
                 "momentum1": (p0, p1),
                 "momentum2": (p1, p1 + D * momentum2_dtype.itemsize),
             }
+
+        elif self == EmbOptimType.ADADELTA:
+            # Same layout as ADAM: momentum2 lies after momentum1
+            p1 = p0 + (D * momentum1_dtype.itemsize)
+            return {
+                "momentum1": (p0, p1),
+                "momentum2": (p1, p1 + D * momentum2_dtype.itemsize),
+            }
+
+        elif self == EmbOptimType.RMSPROP:
+            return {"momentum2": (p0, p0 + D * momentum2_dtype.itemsize)}
 
         else:
             return {}
@@ -251,6 +278,13 @@ class EmbOptimType(enum.Enum):
                 "momentum2": table_size_cumsum,
                 "row_counter": row_count_cumsum,
             }
+        elif self == EmbOptimType.ADADELTA:
+            params = {
+                "momentum1": table_size_cumsum,
+                "momentum2": table_size_cumsum,
+            }
+        elif self == EmbOptimType.RMSPROP:
+            params = {"momentum2": table_size_cumsum}
         else:
             params = {}
 
