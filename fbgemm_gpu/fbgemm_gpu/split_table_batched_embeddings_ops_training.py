@@ -1074,6 +1074,8 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
                 OptimType.PARTIAL_ROWWISE_LAMB,
                 OptimType.ENSEMBLE_ROWWISE_ADAGRAD,
                 OptimType.EMAINPLACE_ROWWISE_ADAGRAD,
+                OptimType.ADADELTA,
+                OptimType.RMSPROP,
                 OptimType.NONE,
             ), f"Optimizer {optimizer} is not supported."
 
@@ -1225,8 +1227,9 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
                 in (OptimType.PARTIAL_ROWWISE_ADAM, OptimType.ENSEMBLE_ROWWISE_ADAGRAD)
                 or optimizer_state_dtypes is None
             ), "optimizer_state_dtypes option is only supported for OptimType.PARTIAL_ROWWISE_ADAM and OptimType.ENSEMBLE_ROWWISE_ADAGRAD"
-            if optimizer in (OptimType.EXACT_SGD,):
+            if optimizer in (OptimType.EXACT_SGD, OptimType.RMSPROP):
                 # NOTE: make TorchScript work!
+                # RMSPROP only uses momentum2 (E[g^2]); skip momentum1 allocation.
                 self._register_nonpersistent_buffers("momentum1")
             else:
                 momentum1_dtype = (
@@ -1267,6 +1270,8 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
                 OptimType.LAMB,
                 OptimType.PARTIAL_ROWWISE_LAMB,
                 OptimType.ENSEMBLE_ROWWISE_ADAGRAD,
+                OptimType.ADADELTA,
+                OptimType.RMSPROP,
             ):
                 rowwise = optimizer in (
                     OptimType.PARTIAL_ROWWISE_ADAM,
@@ -2645,6 +2650,25 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
                     iter_int,
                 ),
             )
+        if self.optimizer == OptimType.ADADELTA:
+            return self._report_io_size_count(
+                "fwd_output",
+                invokers.lookup_adadelta.invoke(
+                    common_args,
+                    self.optimizer_args,
+                    momentum1,
+                    momentum2,
+                ),
+            )
+        if self.optimizer == OptimType.RMSPROP:
+            return self._report_io_size_count(
+                "fwd_output",
+                invokers.lookup_rmsprop.invoke(
+                    common_args,
+                    self.optimizer_args,
+                    momentum2,
+                ),
+            )
 
         prev_iter = invokers.lookup_args.Momentum(
             # pyre-fixme[6]: For 1st argument expected `Tensor` but got
@@ -3323,6 +3347,17 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
                 }
                 for states in split_optimizer_states
             ]
+        elif self.optimizer == OptimType.ADADELTA:
+            # state[0] = momentum1 (E[g^2], "square_avg"), state[1] = momentum2 (E[dx^2], "acc_delta")
+            list_of_state_dict = [
+                {"square_avg": states[0], "acc_delta": states[1]}
+                for states in split_optimizer_states
+            ]
+        elif self.optimizer == OptimType.RMSPROP:
+            # momentum1 is skipped for RMSPROP, so state[0] = momentum2 (E[g^2], "square_avg")
+            list_of_state_dict = [
+                {"square_avg": states[0]} for states in split_optimizer_states
+            ]
         else:
             raise NotImplementedError(
                 f"Getting optimizer state {self.optimizer} is not implmeneted"
@@ -3366,7 +3401,11 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
 
             (9) `ENSEMBLE_ROWWISE_ADAGRAD`: `momentum1` (rowwise), `momentum2`
 
-            (10) `NONE`: no states (throwing an error)
+            (10) `ADADELTA`: `momentum1` (E[g^2]), `momentum2` (E[dx^2])
+
+            (11) `RMSPROP`: `momentum2` (E[g^2])
+
+            (12) `NONE`: no states (throwing an error)
 
         """
         if self.optimizer == OptimType.NONE:
@@ -3401,7 +3440,7 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
             return splits
 
         states: list[list[torch.Tensor]] = []
-        if self.optimizer not in (OptimType.EXACT_SGD,):
+        if self.optimizer not in (OptimType.EXACT_SGD, OptimType.RMSPROP):
             states.append(
                 get_optimizer_states(
                     # pyre-fixme[6]: For 1st argument expected `Tensor` but got
@@ -3433,6 +3472,8 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
             OptimType.LAMB,
             OptimType.PARTIAL_ROWWISE_LAMB,
             OptimType.ENSEMBLE_ROWWISE_ADAGRAD,
+            OptimType.ADADELTA,
+            OptimType.RMSPROP,
         ):
             states.append(
                 get_optimizer_states(
